@@ -1,0 +1,9 @@
+{
+  "name": "processa-imagem-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "jimp": "0.22.12"
+  }
+}

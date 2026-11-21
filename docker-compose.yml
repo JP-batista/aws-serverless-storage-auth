@@ -4,5 +4,8 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,dynamodb
+      - SERVICES=s3,dynamodb,lambda,iam,logs
       - DEFAULT_REGION=us-east-1
+    volumes:
+      # Necessário para a Lambda: o LocalStack sobe um container por função
+      - "/var/run/docker.sock:/var/run/docker.sock"
