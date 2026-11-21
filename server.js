@@ -5,8 +5,13 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const {
   S3Client, CreateBucketCommand, HeadBucketCommand, PutObjectCommand,
-  ListObjectsV2Command, GetObjectCommand,
+  ListObjectsV2Command, GetObjectCommand, PutBucketNotificationConfigurationCommand,
 } = require('@aws-sdk/client-s3');
+const {
+  LambdaClient, CreateFunctionCommand, UpdateFunctionCodeCommand, GetFunctionCommand,
+  AddPermissionCommand, waitUntilFunctionActiveV2, waitUntilFunctionUpdatedV2,
+} = require('@aws-sdk/client-lambda');
+const AdmZip = require('adm-zip');
 const { DynamoDBClient, CreateTableCommand, DescribeTableCommand } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 
@@ -18,8 +23,11 @@ const cfg = {
 };
 const s3 = new S3Client({ ...cfg, forcePathStyle: true });
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient(cfg));
+const lambda = new LambdaClient(cfg);
 const BUCKET = 'meu-bucket';
+const OUTPUT_BUCKET = 'meu-bucket-processado';
 const TABLE = 'usuarios';
+const FUNCTION = 'processa-imagem';
 
 const app = express();
 app.use(express.json());
@@ -76,8 +84,15 @@ app.post('/api/files', auth, upload.single('file'), async (req, res) => {
 
 app.get('/api/files', auth, async (req, res) => {
   try {
-    const out = await s3.send(new ListObjectsV2Command({ Bucket: BUCKET }));
-    res.json((out.Contents || []).map(o => ({ key: o.Key, size: o.Size, lastModified: o.LastModified })));
+    const [out, proc] = await Promise.all([
+      s3.send(new ListObjectsV2Command({ Bucket: BUCKET })),
+      s3.send(new ListObjectsV2Command({ Bucket: OUTPUT_BUCKET })),
+    ]);
+    const processed = new Set((proc.Contents || []).map(o => o.Key));
+    res.json((out.Contents || []).map(o => {
+      const pkey = o.Key.replace(/\.[^.]+$/, '') + '.png';
+      return { key: o.Key, size: o.Size, lastModified: o.LastModified, processed: processed.has(pkey) ? pkey : null };
+    }));
   } catch (e) { console.error(e); res.status(500).json({ error: 'Erro ao listar' }); }
 });
 
@@ -90,10 +105,59 @@ app.get('/api/files/:key', auth, async (req, res) => {
   } catch (e) { res.status(404).json({ error: 'Arquivo não encontrado' }); }
 });
 
-// ---------- Inicialização: cria bucket e tabela se não existirem ----------
+// ---------- Atividade 3: resultado da Lambda (bucket processado) ----------
+app.get('/api/processed/:key', auth, async (req, res) => {
+  try {
+    const out = await s3.send(new GetObjectCommand({ Bucket: OUTPUT_BUCKET, Key: req.params.key }));
+    res.set('Content-Type', out.ContentType);
+    if (req.query.download) res.attachment(req.params.key);
+    out.Body.pipe(res);
+  } catch (e) { res.status(404).json({ error: 'Ainda não processada' }); }
+});
+
+// Publica (ou atualiza) a Lambda e liga o gatilho "ObjectCreated" do bucket de entrada.
+async function deployLambda() {
+  const zip = new AdmZip();
+  zip.addLocalFolder(path.join(__dirname, 'lambda'));
+  const ZipFile = zip.toBuffer();
+  let arn;
+  try {
+    ({ Configuration: { FunctionArn: arn } } = await lambda.send(new GetFunctionCommand({ FunctionName: FUNCTION })));
+    await lambda.send(new UpdateFunctionCodeCommand({ FunctionName: FUNCTION, ZipFile }));
+    await waitUntilFunctionUpdatedV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: FUNCTION });
+  } catch (e) {
+    if (e.name !== 'ResourceNotFoundException') throw e;
+    ({ FunctionArn: arn } = await lambda.send(new CreateFunctionCommand({
+      FunctionName: FUNCTION,
+      Runtime: 'nodejs20.x',
+      Handler: 'index.handler',
+      Role: 'arn:aws:iam::000000000000:role/lambda-role', // LocalStack aceita qualquer role
+      Code: { ZipFile },
+      Timeout: 60,
+      MemorySize: 512,
+      Environment: { Variables: { OUTPUT_BUCKET } },
+    })));
+    await waitUntilFunctionActiveV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: FUNCTION });
+    await lambda.send(new AddPermissionCommand({
+      FunctionName: FUNCTION, StatementId: 's3-invoke', Action: 'lambda:InvokeFunction',
+      Principal: 's3.amazonaws.com', SourceArn: `arn:aws:s3:::${BUCKET}`,
+    }));
+  }
+  await s3.send(new PutBucketNotificationConfigurationCommand({
+    Bucket: BUCKET,
+    NotificationConfiguration: {
+      LambdaFunctionConfigurations: [{ LambdaFunctionArn: arn, Events: ['s3:ObjectCreated:*'] }],
+    },
+  }));
+  console.log(`Lambda "${FUNCTION}" pronta e ligada a s3://${BUCKET}`);
+}
+
+// ---------- Inicialização: cria buckets, tabela e Lambda se não existirem ----------
 async function init() {
-  try { await s3.send(new HeadBucketCommand({ Bucket: BUCKET })); }
-  catch { await s3.send(new CreateBucketCommand({ Bucket: BUCKET })); }
+  for (const b of [BUCKET, OUTPUT_BUCKET]) {
+    try { await s3.send(new HeadBucketCommand({ Bucket: b })); }
+    catch { await s3.send(new CreateBucketCommand({ Bucket: b })); }
+  }
   try { await ddb.send(new DescribeTableCommand({ TableName: TABLE })); }
   catch {
     await ddb.send(new CreateTableCommand({
@@ -103,6 +167,7 @@ async function init() {
       BillingMode: 'PAY_PER_REQUEST',
     }));
   }
+  await deployLambda();
 }
 
 init()

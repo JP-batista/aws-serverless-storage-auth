@@ -3,20 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LocalStack: S3 + DynamoDB</title>
+<title>LocalStack: S3 + DynamoDB + Lambda</title>
 <style>
   body{font-family:system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222}
   input,button{padding:.5rem;margin:.2rem 0;font-size:1rem}
   button{cursor:pointer}
   .card{border:1px solid #ddd;border-radius:8px;padding:1rem;margin-bottom:1rem}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem}
-  .grid img{width:100%;height:120px;object-fit:cover;border-radius:6px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+  .pair img{width:100%;height:120px;object-fit:cover;border-radius:6px;background:#f2f2f2}
+  .pending{height:120px;border-radius:6px;background:#f2f2f2;display:flex;align-items:center;justify-content:center;font-size:.8rem;color:#666;text-align:center}
+  .lbl{font-size:.75rem;color:#666}
   .err{color:#b00020}
   .hidden{display:none}
 </style>
 </head>
 <body>
-<h1>Upload de imagens (S3) + Login (DynamoDB)</h1>
+<h1>Upload de imagens (S3) + Login (DynamoDB) + Processamento (Lambda)</h1>
 
 <section id="auth" class="card">
   <h2 id="authTitle">Entrar</h2>
@@ -95,11 +98,23 @@ async function loadFiles() {
   $('list').innerHTML = files.length ? '' : '<p>Nenhuma imagem ainda.</p>';
   for (const f of files) {
     const url = '/api/files/' + encodeURIComponent(f.key);
+    const purl = f.processed && '/api/processed/' + encodeURIComponent(f.processed);
     const d = document.createElement('div');
-    d.innerHTML = `<img src="${url}" alt=""><div style="font-size:.8rem;word-break:break-all"></div><a href="${url}?download=1">Baixar</a>`;
+    d.className = 'card';
+    d.innerHTML = `<div class="pair">
+        <div><div class="lbl">Original (meu-bucket)</div><img src="${url}" alt="Imagem original"></div>
+        <div><div class="lbl">Lambda (meu-bucket-processado)</div>${purl
+          ? `<img src="${purl}" alt="Miniatura processada pela Lambda">`
+          : '<div class="pending">Processando na Lambda…</div>'}</div>
+      </div>
+      <div style="font-size:.8rem;word-break:break-all;margin-top:.4rem"></div>
+      <a href="${url}?download=1">Baixar original</a>${purl ? ` · <a href="${purl}?download=1">Baixar processada</a>` : ''}`;
     d.children[1].textContent = f.key;
     $('list').appendChild(d);
   }
+  // A Lambda roda de forma assíncrona: atualiza a lista até todas terem resultado.
+  clearTimeout(loadFiles.t);
+  if (files.some(f => !f.processed)) loadFiles.t = setTimeout(loadFiles, 2000);
 }
 
 api('/api/me').then(show).catch(() => show(null));
