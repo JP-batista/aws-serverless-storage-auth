@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LocalStack: S3 + DynamoDB</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222}
+  input,button{padding:.5rem;margin:.2rem 0;font-size:1rem}
+  button{cursor:pointer}
+  .card{border:1px solid #ddd;border-radius:8px;padding:1rem;margin-bottom:1rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1rem}
+  .grid img{width:100%;height:120px;object-fit:cover;border-radius:6px}
+  .err{color:#b00020}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<h1>Upload de imagens (S3) + Login (DynamoDB)</h1>
+
+<section id="auth" class="card">
+  <h2 id="authTitle">Entrar</h2>
+  <input id="name" placeholder="Nome" class="hidden"><br>
+  <input id="email" type="email" placeholder="Email"><br>
+  <input id="password" type="password" placeholder="Senha"><br>
+  <button id="submit">Entrar</button>
+  <button id="toggle" type="button">Criar conta</button>
+  <p id="msg" class="err"></p>
+</section>
+
+<section id="app" class="hidden">
+  <p>Olá, <b id="who"></b> <button id="logout">Sair</button></p>
+  <div class="card">
+    <h2>Enviar imagem</h2>
+    <input id="file" type="file" accept="image/*">
+    <button id="upload">Enviar</button>
+    <p id="upmsg" class="err"></p>
+  </div>
+  <h2>Imagens</h2>
+  <div id="list" class="grid"></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+let registering = false;
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Erro');
+  return data;
+}
+const json = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+function show(user) {
+  $('auth').classList.toggle('hidden', !!user);
+  $('app').classList.toggle('hidden', !user);
+  if (user) { $('who').textContent = user.name; loadFiles(); }
+}
+
+$('toggle').onclick = () => {
+  registering = !registering;
+  $('authTitle').textContent = registering ? 'Criar conta' : 'Entrar';
+  $('submit').textContent = registering ? 'Cadastrar' : 'Entrar';
+  $('toggle').textContent = registering ? 'Já tenho conta' : 'Criar conta';
+  $('name').classList.toggle('hidden', !registering);
+  $('msg').textContent = '';
+};
+
+$('submit').onclick = async () => {
+  const email = $('email').value, password = $('password').value;
+  try {
+    if (registering) {
+      await api('/api/register', json({ email, password, name: $('name').value }));
+      $('toggle').click();
+      $('msg').textContent = 'Conta criada! Faça login.';
+      return;
+    }
+    show(await api('/api/login', json({ email, password })));
+  } catch (e) { $('msg').textContent = e.message; }
+};
+
+$('logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); show(null); };
+
+$('upload').onclick = async () => {
+  const f = $('file').files[0];
+  if (!f) { $('upmsg').textContent = 'Escolha uma imagem'; return; }
+  const fd = new FormData(); fd.append('file', f);
+  try { await api('/api/files', { method: 'POST', body: fd }); $('upmsg').textContent = ''; $('file').value = ''; loadFiles(); }
+  catch (e) { $('upmsg').textContent = e.message; }
+};
+
+async function loadFiles() {
+  const files = await api('/api/files');
+  $('list').innerHTML = files.length ? '' : '<p>Nenhuma imagem ainda.</p>';
+  for (const f of files) {
+    const url = '/api/files/' + encodeURIComponent(f.key);
+    const d = document.createElement('div');
+    d.innerHTML = `<img src="${url}" alt=""><div style="font-size:.8rem;word-break:break-all"></div><a href="${url}?download=1">Baixar</a>`;
+    d.children[1].textContent = f.key;
+    $('list').appendChild(d);
+  }
+}
+
+api('/api/me').then(show).catch(() => show(null));
+</script>
+</body>
+</html>
