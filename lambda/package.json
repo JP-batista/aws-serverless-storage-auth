@@ -1,9 +1,9 @@
 {
-  "name": "processa-imagem-lambda",
+  "name": "cloudlens-lambdas",
   "version": "1.0.0",
   "private": true,
-  "main": "index.js",
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "jimp": "0.22.12"
   }
 }

@@ -1,0 +1,13 @@
+# Docker Swarm: 3 réplicas do servidor web com balanceamento de carga.
+# Pré-requisitos: LocalStack no ar (docker compose up -d) e infraestrutura criada (npm run deploy).
+services:
+  web:
+    image: cloudlens-web:latest
+    environment:
+      - API_URL=http://host.docker.internal:4566/restapis/cloudlens/dev/_user_request_
+    ports:
+      - "8088:3000"
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure

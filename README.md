@@ -1,30 +1,45 @@
-# Atividades #1, #2 e #3 – LocalStack (S3 + DynamoDB + Lambda)
+# CloudLens: pipeline de imagens serverless no LocalStack
 
-App web (Node/Express) com:
-- **Atividade 1**: upload de imagens para um bucket **S3** (`meu-bucket`), listagem e download (acessível só logado).
-- **Atividade 2**: cadastro e login de usuários no **DynamoDB** (tabela `usuarios`, senha com bcrypt).
-- **Atividade 3**: função **Lambda** `processa-imagem` acionada pelo upload no `meu-bucket`. Ela gera uma miniatura (300 px, escala de cinza) e grava em `meu-bucket-processado`. A tela mostra a original e a processada lado a lado.
+API Gateway, Lambda, DynamoDB, S3, SQS e SNS, rodando localmente.
 
 ```
-Navegador ──► Express (:3000) ──► DynamoDB  (usuarios)
-                     │
-                     └──► S3 meu-bucket ──(ObjectCreated)──► Lambda processa-imagem ──► S3 meu-bucket-processado
+Navegador ─► servidor web ─► API Gateway ─┬─► Lambda auth ─────► DynamoDB (usuarios)
+                                          └─► Lambda arquivos ─► S3 meu-bucket + DynamoDB (imagens)
+
+S3 ─► SQS fila-processamento ─► Lambda processa-imagem ─► S3 meu-bucket-processado
+              │ 3 falhas                    │
+              ▼                             ▼
+             DLQ ─► Lambda registra-falha ─► SNS imagem-processada
+                                             └─► SQS fila-notificacoes ─► Lambda notifica ─► DynamoDB (notificacoes)
 ```
+
+- [Definição e arquitetura](docs/arquitetura.md) ([PDF](docs/arquitetura.pdf))
+- [Roteiro da demonstração e Docker Swarm](docs/roteiro-demo.md)
 
 ## Como rodar
-```bash
-docker compose up -d        # sobe o LocalStack em :4566 (precisa do Docker Desktop aberto)
-npm install                 # instala também as dependências da Lambda (pasta lambda/)
-npm start                   # http://localhost:3000
-```
-Na inicialização o app cria os buckets e a tabela, empacota a pasta `lambda/` num .zip, publica a função e configura a notificação do S3.
+Precisa de Node.js 18 ou mais novo e do Docker Desktop aberto.
 
-## Conferir via CLI
 ```bash
-aws --endpoint-url=http://localhost:4566 s3 ls s3://meu-bucket
-aws --endpoint-url=http://localhost:4566 s3 ls s3://meu-bucket-processado
-aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name usuarios
-aws --endpoint-url=http://localhost:4566 lambda list-functions
-aws --endpoint-url=http://localhost:4566 s3api get-bucket-notification-configuration --bucket meu-bucket
-aws --endpoint-url=http://localhost:4566 logs tail /aws/lambda/processa-imagem
+npm install            # instala também as dependências das Lambdas
+docker compose up -d   # LocalStack em :4566
+npm start              # faz o deploy e abre http://localhost:3000
 ```
+
+| Comando | O que faz |
+|---|---|
+| `npm run deploy` | Cria ou atualiza a infraestrutura |
+| `npm run web` | Sobe só o servidor web |
+| `npm test` | Teste de ponta a ponta (com o servidor no ar; leva alguns minutos) |
+
+Para outra porta, defina `PORT`. No teste, defina `BASE` (ex.: `BASE=http://localhost:8088`).
+
+Um novo deploy troca o segredo do JWT, então é preciso entrar de novo. Para manter o mesmo, defina `JWT_SECRET`.
+
+## Estrutura
+| Caminho | Conteúdo |
+|---|---|
+| `lambda/` | As 5 funções e o código compartilhado |
+| `deploy.js` | Infraestrutura no LocalStack |
+| `server.js`, `public/` | Servidor web (sem estado) e interface |
+| `Dockerfile`, `stack.yml` | Servidor web no Docker Swarm |
+| `tests/e2e.js` | Teste de ponta a ponta |

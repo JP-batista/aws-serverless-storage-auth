@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CloudLens · S3 + DynamoDB + Lambda</title>
+<title>CloudLens · Pipeline de imagens serverless</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&family=Fira+Code:wght@400;600&display=swap">
 <style>
@@ -139,7 +139,7 @@ main{max-width:1240px;margin:0 auto;padding:2rem clamp(1rem,4vw,3rem) 4rem}
 .meta .sub{display:flex;gap:.5rem;align-items:center;color:var(--muted);font-size:.78rem;margin:.3rem 0 .8rem;font-family:var(--mono)}
 .meta .sub span{white-space:nowrap}
 .badge{padding:.15rem .45rem;border-radius:6px;font-size:.7rem;font-family:var(--mono)}
-.badge.ok{background:var(--ok-soft);color:var(--ok)} .badge.wait{background:var(--accent-soft);color:var(--accent)}
+.badge.ok{background:var(--ok-soft);color:var(--ok)} .badge.wait{background:var(--accent-soft);color:var(--accent)} .badge.err{background:rgba(255,107,107,.14);color:var(--err)}
 .meta .acts{display:flex;gap:.4rem;flex-wrap:wrap}
 .empty{grid-column:1/-1;text-align:center;padding:3rem 1rem;color:var(--muted);border:1px dashed var(--line);border-radius:var(--radius)}
 
@@ -191,13 +191,13 @@ main{max-width:1240px;margin:0 auto;padding:2rem clamp(1rem,4vw,3rem) 4rem}
   <div class="hero">
     <div class="brand"><div class="logo"><svg width="20" height="20"><use href="#i-cloud"/></svg></div>CloudLens</div>
     <h1>Suas imagens na nuvem,<br><em>processadas sozinhas.</em></h1>
-    <p>Login guardado no DynamoDB, arquivos no S3 e uma função Lambda que cria a miniatura de cada foto assim que ela chega. Tudo rodando no LocalStack.</p>
+    <p>API Gateway e Lambda atendem o app, o DynamoDB guarda os dados, o S3 guarda as fotos, e SQS e SNS cuidam do processamento em segundo plano. Tudo no LocalStack.</p>
     <div class="flow" aria-hidden="true">
-      <div class="node"><b>S3</b><span>upload</span></div>
+      <div class="node"><b>S3 + SQS</b><span>enfileira</span></div>
       <div class="wire"></div>
       <div class="node"><b>Lambda</b><span>processa</span></div>
       <div class="wire w2"></div>
-      <div class="node"><b>S3</b><span>miniatura</span></div>
+      <div class="node"><b>SNS</b><span>avisa</span></div>
     </div>
   </div>
 
@@ -239,22 +239,23 @@ main{max-width:1240px;margin:0 auto;padding:2rem clamp(1rem,4vw,3rem) 4rem}
 
     <div class="row">
       <div class="panel">
-        <h3><svg width="18" height="18"><use href="#i-up"/></svg>Enviar imagens <span class="tagx">POST /api/files → S3</span></h3>
+        <h3><svg width="18" height="18"><use href="#i-up"/></svg>Enviar imagens <span class="tagx">API Gateway → Lambda → S3</span></h3>
         <label class="drop" id="drop">
-          <input id="file" type="file" accept="image/*" multiple hidden>
+          <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/bmp" multiple hidden>
           <div class="big"><svg width="26" height="26"><use href="#i-cloud"/></svg></div>
           <p><b>Arraste imagens aqui</b> ou clique para escolher</p>
-          <p style="font-size:.8rem">PNG, JPG, GIF ou WebP · até 10 MB cada</p>
+          <p style="font-size:.8rem">PNG, JPG, GIF ou BMP · até 3 MB cada</p>
         </label>
         <div class="queue" id="queue"></div>
       </div>
       <div class="panel">
         <h3><svg width="18" height="18"><use href="#i-bolt"/></svg>Pipeline ao vivo <span class="tagx" id="pipeName"></span></h3>
-        <div id="pipeEmpty" class="pipe-empty">Envie uma imagem para acompanhar o caminho dela: S3 → Lambda → S3.</div>
+        <div id="pipeEmpty" class="pipe-empty">Envie uma imagem para acompanhar o caminho dela: API → S3 → SQS → Lambda → SNS.</div>
         <div class="pipe hidden" id="pipe">
-          <div class="pstep" data-s="0"><div class="pdot"><svg width="16" height="16"><use href="#i-up"/></svg></div><div><b>Upload para o S3</b><span>meu-bucket</span></div></div>
-          <div class="pstep" data-s="1"><div class="pdot"><svg width="16" height="16"><use href="#i-bolt"/></svg></div><div><b>Lambda acionada</b><span>s3:ObjectCreated → processa-imagem</span></div></div>
-          <div class="pstep" data-s="2"><div class="pdot"><svg width="16" height="16"><use href="#i-check"/></svg></div><div><b>Miniatura pronta</b><span>meu-bucket-processado</span></div></div>
+          <div class="pstep" data-s="0"><div class="pdot"><svg width="16" height="16"><use href="#i-up"/></svg></div><div><b>Upload pela API</b><span>API Gateway → arquivos → S3</span></div></div>
+          <div class="pstep" data-s="1"><div class="pdot"><svg width="16" height="16"><use href="#i-bolt"/></svg></div><div><b>Fila e processamento</b><span>S3 → SQS → processa-imagem</span></div></div>
+          <div class="pstep" data-s="2"><div class="pdot"><svg width="16" height="16"><use href="#i-img"/></svg></div><div><b>Miniatura pronta</b><span>meu-bucket-processado</span></div></div>
+          <div class="pstep" data-s="3"><div class="pdot"><svg width="16" height="16"><use href="#i-check"/></svg></div><div><b>Aviso recebido</b><span>SNS → SQS → notifica</span></div></div>
         </div>
       </div>
     </div>
@@ -266,6 +267,7 @@ main{max-width:1240px;margin:0 auto;padding:2rem clamp(1rem,4vw,3rem) 4rem}
         <button class="on" data-f="all">Todas</button>
         <button data-f="done">Processadas</button>
         <button data-f="wait">Pendentes</button>
+        <button data-f="err">Com erro</button>
       </div>
     </div>
     <div class="grid" id="list"></div>
@@ -366,7 +368,7 @@ $('logout').onclick = async () => { await api('/api/logout', { method: 'POST' })
 function show(user) {
   $('auth').classList.toggle('hidden', !!user);
   $('app').classList.toggle('hidden', !user);
-  if (!user) { clearTimeout(loadFiles.t); return; }
+  if (!user) { clearTimeout(loadFiles.t); seen = null; lastKey = null; files = []; $('list').innerHTML = ''; return; }
   $('who').textContent = user.name;
   $('whoEmail').textContent = user.email;
   $('avatar').textContent = ((user.name || '?').trim()[0] || '?').toUpperCase();
@@ -383,7 +385,7 @@ $('file').onchange = e => { uploadAll(e.target.files); e.target.value = ''; };
 function uploadAll(list) {
   const imgs = [...list].filter(f => f.type.startsWith('image/'));
   if (!imgs.length) return toast('Escolha arquivos de imagem.', 'err');
-  imgs.forEach(uploadOne);
+  imgs.forEach(f => f.size > 3 * 1048576 ? toast(`${f.name} passa de 3 MB`, 'err') : uploadOne(f));
 }
 
 function uploadOne(f) {
@@ -396,7 +398,6 @@ function uploadOne(f) {
   const bar = row.querySelector('.bar i'), st = row.querySelector('.st');
   setPipe(0, f.name);
 
-  const fd = new FormData(); fd.append('file', f);
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/files');
   xhr.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded / e.total * 100); bar.style.width = p + '%'; st.textContent = p + '%'; } };
@@ -405,13 +406,18 @@ function uploadOne(f) {
     if (xhr.status >= 200 && xhr.status < 300) {
       bar.style.width = '100%'; st.textContent = 'no S3'; row.classList.add('done');
       lastKey = data.key; setPipe(1, niceName(data.key));
-      toast(`${f.name} enviada ao S3`);
+      toast(`${f.name} enviada`);
       loadFiles();
       setTimeout(() => { row.style.transition = 'opacity .4s'; row.style.opacity = 0; setTimeout(() => row.remove(), 400); }, 4000);
     } else { st.textContent = 'erro'; toast(data.error || 'Falha no upload', 'err'); }
   };
   xhr.onerror = () => { st.textContent = 'erro'; toast('Falha de rede no upload', 'err'); };
-  xhr.send(fd);
+  const reader = new FileReader();
+  reader.onload = () => {
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.send(JSON.stringify({ name: f.name, type: f.type, data: reader.result.split(',')[1] }));
+  };
+  reader.readAsDataURL(f);
 }
 
 /* ---------- pipeline ao vivo (Lambda) ---------- */
@@ -422,8 +428,25 @@ function setPipe(stage, name) {
   document.querySelectorAll('.pstep').forEach(s => {
     const i = +s.dataset.s;
     s.classList.toggle('done', i < stage);
-    s.classList.toggle('active', i === stage && stage < 3);
+    s.classList.toggle('active', i === stage && stage < 4);
   });
+}
+
+/* ---------- avisos (SNS → SQS → Lambda notifica → DynamoDB) ---------- */
+let seen = null; // ids já mostrados; null = primeira carga, sem toast
+async function loadNotifications() {
+  let list;
+  try { list = await api('/api/notifications'); } catch { return; }
+  const first = seen === null;
+  if (first) seen = new Set();
+  for (const n of list) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    if (first) continue;
+    const ok = n.status === 'PRONTA';
+    toast(ok ? `Aviso: ${niceName(n.key)} está pronta` : `Aviso: falha ao processar ${niceName(n.key)}`, ok ? 'ok' : 'err');
+    if (n.key === lastKey) { if (ok) setPipe(4); lastKey = null; }
+  }
 }
 
 /* ---------- galeria ---------- */
@@ -437,18 +460,19 @@ async function loadFiles() {
   countUp($('sProc'), files.filter(f => f.processed).length);
   countUp($('sSize'), files.reduce((s, f) => s + f.size, 0), fmtSize);
 
-  if (lastKey) {
-    const it = files.find(f => f.key === lastKey);
-    if (it && it.processed) { setPipe(3); toast('A Lambda gerou a miniatura!'); lastKey = null; }
-  }
+  const current = files.find(f => f.key === lastKey);
+  if (current && current.status === 'PRONTA') setPipe(3);
   render();
-  if (files.some(f => !f.processed)) loadFiles.t = setTimeout(loadFiles, 2000);
+  await loadNotifications();
+  // Continua consultando enquanto há processamento ou um aviso a caminho.
+  clearTimeout(loadFiles.t);
+  if (lastKey || files.some(f => f.status === 'PROCESSANDO')) loadFiles.t = setTimeout(loadFiles, 2000);
 }
 
 function render() {
   const q = $('search').value.trim().toLowerCase();
   const list = files.filter(f =>
-    (filter === 'all' || (filter === 'done') === !!f.processed) &&
+    (filter === 'all' || f.status === { done: 'PRONTA', wait: 'PROCESSANDO', err: 'ERRO' }[filter]) &&
     niceName(f.key).toLowerCase().includes(q));
   const grid = $('list');
   const keep = new Map([...grid.querySelectorAll('.card')].map(c => [c.dataset.key, c]));
@@ -459,14 +483,15 @@ function render() {
   }
   for (const f of list) {
     const old = keep.get(f.key);
-    if (old && old.dataset.proc === String(!!f.processed)) { old.style.animation = 'none'; grid.appendChild(old); continue; }
+    if (old && old.dataset.status === f.status) { old.style.animation = 'none'; grid.appendChild(old); continue; }
     grid.appendChild(card(f));
   }
 }
 
 function card(f) {
   const c = document.createElement('div');
-  c.className = 'card'; c.dataset.key = f.key; c.dataset.proc = String(!!f.processed);
+  c.className = 'card'; c.dataset.key = f.key; c.dataset.status = f.status;
+  const failed = f.status === 'ERRO';
   const proc = f.processed;
   c.innerHTML = `
     <div class="ba">
@@ -475,13 +500,14 @@ function card(f) {
         <div class="handle"></div>
         <input type="range" min="0" max="100" value="50" aria-label="Comparar original e processada">
         <span class="lbl l">original</span><span class="lbl r">lambda</span>`
-      : `<span class="wait"><span class="spinner"></span>Lambda processando…</span>`}
+      : failed ? `<span class="wait" style="color:var(--err)">Falhou após 3 tentativas</span>`
+      : `<span class="wait"><span class="spinner"></span>Processando…</span>`}
       <button class="zoom" title="Ampliar" aria-label="Ampliar"><svg width="16" height="16"><use href="#i-zoom"/></svg></button>
     </div>
     <div class="meta">
       <div class="nm"></div>
       <div class="sub"><span>${fmtSize(f.size)}</span>·<span>${fmtDate(f.lastModified)}</span>
-        <span class="badge ${proc ? 'ok' : 'wait'}" style="margin-left:auto">${proc ? 'processada' : 'pendente'}</span></div>
+        <span class="badge ${proc ? 'ok' : failed ? 'err' : 'wait'}" style="margin-left:auto">${proc ? 'processada' : failed ? 'erro' : 'pendente'}</span></div>
       <div class="acts">
         <a class="btn ghost sm" href="${fileUrl(f.key)}?download=1"><svg width="14" height="14"><use href="#i-down"/></svg>Original</a>
         ${proc ? `<a class="btn ghost sm" href="${procUrl(proc)}?download=1"><svg width="14" height="14"><use href="#i-down"/></svg>Processada</a>` : ''}

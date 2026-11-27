@@ -4,7 +4,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,dynamodb,lambda,iam,logs
+      - SERVICES=s3,dynamodb,lambda,iam,logs,sts,sqs,sns,apigateway
       - DEFAULT_REGION=us-east-1
     volumes:
       # Necessário para a Lambda: o LocalStack sobe um container por função
