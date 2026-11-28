@@ -1,6 +1,6 @@
 # CloudLens: pipeline de imagens serverless no LocalStack
 
-API Gateway, Lambda, DynamoDB, S3, SQS e SNS, rodando localmente.
+Uma galeria de imagens feita com API Gateway, Lambda, DynamoDB, S3, SQS e SNS, tudo rodando na sua máquina.
 
 ```
 Navegador ─► servidor web ─► API Gateway ─┬─► Lambda auth ─────► DynamoDB (usuarios)

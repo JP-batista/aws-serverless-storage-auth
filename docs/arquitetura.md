@@ -6,13 +6,13 @@
 
 ## 1. Definição
 
-O CloudLens é uma galeria de imagens serverless. O usuário cria uma conta, envia imagens e recebe, para cada uma, uma miniatura em escala de cinza gerada em segundo plano. Quando o processamento termina (ou falha), o app mostra um aviso. Cada usuário só acessa os próprios arquivos.
+O CloudLens é uma galeria de imagens serverless. O usuário cria uma conta, envia imagens e recebe, para cada uma, uma miniatura em escala de cinza gerada em segundo plano. O app avisa quando o processamento termina ou dá erro. Cada usuário só acessa os próprios arquivos.
 
-O sistema roda inteiro na máquina, com Docker e LocalStack 3.8, sem conta AWS. Como a aula apresentou, o LocalStack simula os serviços da AWS localmente, com um endpoint unificado na porta 4566 e compatível com o SDK e a CLI oficiais, bastando trocar a endpoint URL [2][8].
+O sistema roda inteiro na máquina, com Docker e LocalStack 3.8, sem conta na AWS. Como vimos em aula, o LocalStack simula os serviços da AWS localmente. Tudo responde em um endpoint só, na porta 4566, e o SDK e a CLI oficiais funcionam do mesmo jeito: basta trocar a endpoint URL [2][8].
 
 ## 2. Serviços exigidos pela atividade
 
-A atividade pede no mínimo S3, Lambda, DynamoDB, SQS/SNS e API Gateway [2]. As definições abaixo seguem a aula de LocalStack [2]; a do SNS, que a aula cita junto com a SQS como mensageria, vem da documentação da AWS [7].
+A atividade pede no mínimo S3, Lambda, DynamoDB, SQS/SNS e API Gateway [2]. As definições abaixo seguem a aula de LocalStack [2]. A do SNS vem da documentação da AWS [7], porque a aula só o cita junto com a SQS, como mensageria.
 
 | Serviço | O que é | Papel no CloudLens |
 |---|---|---|
@@ -78,10 +78,10 @@ Há três formas de comunicação.
 Se o processamento lança erro, a mensagem volta para a fila. Depois de 3 tentativas, vai para a DLQ [5]. A Lambda `registra-falha` marca a imagem como `ERRO` e publica o evento no mesmo tópico.
 
 ### 4.4 Notificação
-O SNS entrega o evento à `fila-notificacoes`. A Lambda `notifica` grava o aviso no DynamoDB. O app consulta `GET /api/notifications` enquanto há algo em andamento e mostra o aviso na tela. O identificador do aviso é determinístico, então uma mensagem entregue duas vezes (o que a fila Standard permite [2]) não gera aviso duplicado.
+O SNS entrega o evento à `fila-notificacoes`. A Lambda `notifica` grava o aviso no DynamoDB. Enquanto houver imagem em andamento, o app consulta `GET /api/notifications` e mostra o aviso na tela. A fila Standard pode entregar a mesma mensagem duas vezes [2], mas o identificador do aviso é determinístico, então isso não gera aviso duplicado.
 
 ### 4.5 Listagem e download
-`GET /api/files` consulta a tabela `imagens`. `GET /api/files/{nome}` e `GET /api/processed/{nome}` leem o S3 por meio da Lambda. O navegador nunca acessa o S3 diretamente.
+`GET /api/files` consulta a tabela `imagens`. `GET /api/files/{nome}` e `GET /api/processed/{nome}` leem o S3 pela Lambda. O navegador nunca acessa o S3 direto.
 
 ## 5. API
 
@@ -111,17 +111,17 @@ No navegador, as rotas têm o prefixo `/api`.
 
 ## 7. Decisões e limitações
 
-- **JWT validado nas Lambdas.** Testamos um Lambda Authorizer em API REST no LocalStack 3.8 gratuito: ele não foi aplicado, e um token inválido recebeu HTTP 200. Por isso cada rota protegida valida o token. Na AWS real, essa validação iria para um Authorizer. É o limite que a aula aponta no LocalStack: nem todos os serviços têm paridade total com a AWS real [2].
-- **Upload pela API.** O app não acessa o S3 diretamente. O limite de 3 MB mantém a requisição dentro do payload da Lambda.
-- **Formatos.** PNG, JPEG, GIF e BMP, que a biblioteca de imagem processa. WebP é recusado. O conteúdo só é conferido no processamento; um arquivo corrompido segue o caminho da DLQ.
+- **JWT validado nas Lambdas.** Testamos um Lambda Authorizer em API REST no LocalStack 3.8 gratuito, e ele não foi aplicado: um token inválido recebeu HTTP 200. Por isso cada rota protegida valida o token por conta própria. Na AWS real, essa validação iria para um Authorizer. A aula já avisava desse limite do LocalStack: nem todo serviço tem paridade total com a AWS real [2].
+- **Upload pela API.** O app não acessa o S3 direto. O limite de 3 MB mantém a requisição dentro do payload da Lambda.
+- **Formatos.** PNG, JPEG, GIF e BMP, que a biblioteca de imagem processa. WebP é recusado. O conteúdo só é conferido no processamento, então um arquivo corrompido acaba na DLQ.
 - **Visibility timeout de 30 s** (funções com timeout de 20 s), para a DLQ aparecer durante a demonstração. Em produção, a recomendação da AWS é cerca de 6 vezes o timeout da função [6].
 - **Logout** apaga o cookie. O token não é revogado no servidor e vale até expirar.
-- **Segurança de produção** fora do escopo: HTTPS, política de senha mais forte, limite de tentativas, papéis IAM mínimos (o LocalStack não os exige) e segredo no Secrets Manager. O segredo do JWT é gerado a cada deploy e não vai para o Git.
+- **Segurança de produção** ficou fora do escopo: HTTPS, política de senha mais forte, limite de tentativas, papéis IAM mínimos (o LocalStack não os exige) e segredo no Secrets Manager. O segredo do JWT é gerado a cada deploy e não vai para o Git.
 - **Persistência.** Os dados somem quando o contêiner do LocalStack é recriado.
 
 ## 8. Conceitos da disciplina aplicados ao CloudLens
 
-Os conceitos desta seção vêm do Encontro 1 da disciplina [1], que define nuvem pelas cinco características do NIST [3]. O LocalStack simula as APIs da AWS, não o modelo operacional: não há cobrança, data center nem SLA. Esta seção descreve o sistema como ele seria implantado na AWS real.
+Os conceitos desta seção vêm do Encontro 1 da disciplina [1], que define nuvem pelas cinco características do NIST [3]. Uma ressalva: o LocalStack simula as APIs da AWS, mas não o modelo operacional. Não há cobrança, data center nem SLA. Por isso, aqui o sistema é descrito como ele seria implantado na AWS real.
 
 ### 8.1 Modelo de serviço
 O critério da aula é saber quem aplica o patch de segurança [1].
@@ -161,13 +161,13 @@ Valores mensais publicados pela AWS [4]: API Gateway 99,95%, Lambda 99,95%, Dyna
 | Login | API Gateway × Lambda × DynamoDB = 0,9995 × 0,9995 × 0,9999 | 99,89% | cerca de 47 min/mês |
 | Upload | Login × S3 = 0,9989 × 0,999 | 99,79% | cerca de 1 h 31 min/mês (18 h/ano) |
 
-O cálculo mostra a regra da aula: cada serviço em série puxa a disponibilidade para baixo, e nenhum caminho chega a 99,9%, embora quase todos os serviços tenham SLA maior que isso.
+É a regra da aula na prática: cada serviço em série puxa a disponibilidade para baixo. Nenhum caminho chega a 99,9%, mesmo com quase todos os serviços tendo SLA maior que isso.
 
-Duas decisões do CloudLens trabalham a favor:
-- **A fila tira o processamento da série.** O upload responde assim que o original está no S3. Se a Lambda `processa-imagem` estiver fora, a mensagem espera na `fila-processamento` (4 dias por padrão, até 14) e é processada quando ela voltar. A indisponibilidade do processamento atrasa a miniatura, mas não derruba o upload.
-- **As réplicas do servidor web ficam em paralelo.** Três réplicas independentes de 99% cada entregam 1 − 0,01³ = 99,9999%. A ressalva é que, no Swarm local, as três rodam na mesma máquina e não são independentes: se a máquina cai, todas caem. A redundância real exige réplicas em hosts ou zonas diferentes.
+Duas escolhas do CloudLens ajudam:
+- **A fila tira o processamento da série.** O upload responde assim que o original está no S3. Se a Lambda `processa-imagem` estiver fora, a mensagem espera na `fila-processamento` (4 dias por padrão, até 14) e é processada quando ela voltar. Se o processamento cair, a miniatura atrasa, mas o upload continua funcionando.
+- **As réplicas do servidor web ficam em paralelo.** Três réplicas independentes de 99% cada entregam 1 − 0,01³ = 99,9999%. Só que, no Swarm local, as três rodam na mesma máquina e não são independentes: se a máquina cai, caem todas. Para ter redundância de verdade, as réplicas precisam estar em hosts ou zonas diferentes.
 
-Pela leitura das cinco perguntas da aula, o SLA da AWS devolve crédito de serviço, não o prejuízo, e o crédito precisa ser pedido.
+Lendo o SLA com as cinco perguntas da aula, fica claro que a AWS devolve crédito de serviço, não o prejuízo, e que esse crédito precisa ser pedido.
 
 ### 8.6 Responsabilidade compartilhada
 O provedor responde pela segurança **da** nuvem: data center, hardware, rede física, hipervisor e o runtime das Lambdas. Nós respondemos pela segurança **na** nuvem, e em qualquer modelo os dados e o controle de acesso são nossos. No CloudLens:
@@ -192,7 +192,7 @@ O servidor web não guarda estado: a sessão está no JWT. Por isso ele roda no 
 
 ## 11. Relação com o Meu Controle
 
-O Meu Controle é a proposta de um sistema de finanças pessoais, maior que o CloudLens. O CloudLens **não implementa** o Meu Controle: não há OCR, contas, transações nem a revisão de documentos. Ele demonstra o mesmo padrão de comunicação (API síncrona, processamento por fila com DLQ e aviso por SNS) em um escopo pequeno.
+O Meu Controle é a proposta de um sistema de finanças pessoais, maior que o CloudLens. O CloudLens **não implementa** o Meu Controle: não há OCR, contas, transações nem a revisão de documentos. O que ele faz é mostrar, em escala pequena, o mesmo padrão de comunicação: API síncrona, processamento por fila com DLQ e aviso por SNS.
 
 ## 12. Verificação
 
