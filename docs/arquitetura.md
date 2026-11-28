@@ -1,24 +1,27 @@
 # CloudLens: definição e arquitetura
 
-**Computação em Nuvem, 2026/2**
+**Computação em Nuvem, 2026/2 · Atividade #1 G2**
+
 **Equipe:** Geisbelly Victoria, Rafael Nunes e João Pedro
 
 ## 1. Definição
 
 O CloudLens é uma galeria de imagens serverless. O usuário cria uma conta, envia imagens e recebe, para cada uma, uma miniatura em escala de cinza gerada em segundo plano. Quando o processamento termina (ou falha), o app mostra um aviso. Cada usuário só acessa os próprios arquivos.
 
-O sistema roda inteiro na máquina, com Docker e LocalStack 3.8, sem conta AWS.
+O sistema roda inteiro na máquina, com Docker e LocalStack 3.8, sem conta AWS. Como a aula apresentou, o LocalStack simula os serviços da AWS localmente, com um endpoint unificado na porta 4566 e compatível com o SDK e a CLI oficiais, bastando trocar a endpoint URL [2][8].
 
 ## 2. Serviços exigidos pela atividade
 
-| Serviço | Papel |
-|---|---|
-| **API Gateway** | Porta de entrada HTTP da lógica do sistema (REST, integração proxy com Lambda) |
-| **Lambda** | Toda a lógica: 5 funções |
-| **DynamoDB** | Tabelas `usuarios`, `imagens` e `notificacoes` |
-| **S3** | `meu-bucket` (originais) e `meu-bucket-processado` (miniaturas) |
-| **SQS** | `fila-processamento`, `fila-processamento-dlq` e `fila-notificacoes` |
-| **SNS** | Tópico `imagem-processada` |
+A atividade pede no mínimo S3, Lambda, DynamoDB, SQS/SNS e API Gateway [2]. As definições abaixo seguem a aula de LocalStack [2]; a do SNS, que a aula cita junto com a SQS como mensageria, vem da documentação da AWS [7].
+
+| Serviço | O que é | Papel no CloudLens |
+|---|---|---|
+| **API Gateway** | Cria, publica e gerencia APIs REST, HTTP ou WebSocket; é a porta de entrada do backend e integra com Lambda | Porta de entrada HTTP da lógica do sistema (REST, integração proxy com Lambda) |
+| **Lambda** | Executa funções em resposta a eventos, sem gerenciar servidores; escala sozinha | Toda a lógica: 5 funções |
+| **DynamoDB** | Banco NoSQL serverless, sem esquema fixo, com baixa latência e escala automática | Tabelas `usuarios`, `imagens` e `notificacoes` |
+| **S3** | Armazenamento de objetos em buckets, com 11 noves de durabilidade e controle de acesso | `meu-bucket` (originais) e `meu-bucket-processado` (miniaturas) |
+| **SQS** | Fila gerenciada para comunicação assíncrona e desacoplada; Standard (pode duplicar) ou FIFO | `fila-processamento`, `fila-processamento-dlq` e `fila-notificacoes`, todas Standard |
+| **SNS** | Tópico que entrega cada mensagem publicada a todos os assinantes | Tópico `imagem-processada` |
 
 ## 3. Arquitetura
 
@@ -72,10 +75,10 @@ Há três formas de comunicação.
 4. A Lambda `processa-imagem` consome a fila, gera a miniatura, grava no bucket de saída, marca `PRONTA` e publica no SNS.
 
 ### 4.3 Falhas
-Se o processamento lança erro, a mensagem volta para a fila. Depois de 3 tentativas, vai para a DLQ. A Lambda `registra-falha` marca a imagem como `ERRO` e publica o evento no mesmo tópico.
+Se o processamento lança erro, a mensagem volta para a fila. Depois de 3 tentativas, vai para a DLQ [5]. A Lambda `registra-falha` marca a imagem como `ERRO` e publica o evento no mesmo tópico.
 
 ### 4.4 Notificação
-O SNS entrega o evento à `fila-notificacoes`. A Lambda `notifica` grava o aviso no DynamoDB. O app consulta `GET /api/notifications` enquanto há algo em andamento e mostra o aviso na tela. O identificador do aviso é determinístico, então uma mensagem entregue duas vezes não gera aviso duplicado.
+O SNS entrega o evento à `fila-notificacoes`. A Lambda `notifica` grava o aviso no DynamoDB. O app consulta `GET /api/notifications` enquanto há algo em andamento e mostra o aviso na tela. O identificador do aviso é determinístico, então uma mensagem entregue duas vezes (o que a fila Standard permite [2]) não gera aviso duplicado.
 
 ### 4.5 Listagem e download
 `GET /api/files` consulta a tabela `imagens`. `GET /api/files/{nome}` e `GET /api/processed/{nome}` leem o S3 por meio da Lambda. O navegador nunca acessa o S3 diretamente.
@@ -108,20 +111,20 @@ No navegador, as rotas têm o prefixo `/api`.
 
 ## 7. Decisões e limitações
 
-- **JWT validado nas Lambdas.** Testamos um Lambda Authorizer em API REST no LocalStack 3.8 gratuito: ele não foi aplicado, e um token inválido recebeu HTTP 200. Por isso cada rota protegida valida o token. Na AWS real, essa validação iria para um Authorizer.
+- **JWT validado nas Lambdas.** Testamos um Lambda Authorizer em API REST no LocalStack 3.8 gratuito: ele não foi aplicado, e um token inválido recebeu HTTP 200. Por isso cada rota protegida valida o token. Na AWS real, essa validação iria para um Authorizer. É o limite que a aula aponta no LocalStack: nem todos os serviços têm paridade total com a AWS real [2].
 - **Upload pela API.** O app não acessa o S3 diretamente. O limite de 3 MB mantém a requisição dentro do payload da Lambda.
 - **Formatos.** PNG, JPEG, GIF e BMP, que a biblioteca de imagem processa. WebP é recusado. O conteúdo só é conferido no processamento; um arquivo corrompido segue o caminho da DLQ.
-- **Visibility timeout de 30 s** (funções com timeout de 20 s), para a DLQ aparecer durante a demonstração. Em produção, a recomendação da AWS é cerca de 6 vezes o timeout da função.
+- **Visibility timeout de 30 s** (funções com timeout de 20 s), para a DLQ aparecer durante a demonstração. Em produção, a recomendação da AWS é cerca de 6 vezes o timeout da função [6].
 - **Logout** apaga o cookie. O token não é revogado no servidor e vale até expirar.
 - **Segurança de produção** fora do escopo: HTTPS, política de senha mais forte, limite de tentativas, papéis IAM mínimos (o LocalStack não os exige) e segredo no Secrets Manager. O segredo do JWT é gerado a cada deploy e não vai para o Git.
 - **Persistência.** Os dados somem quando o contêiner do LocalStack é recriado.
 
 ## 8. Conceitos da disciplina aplicados ao CloudLens
 
-O LocalStack simula as APIs da AWS, não o modelo operacional: não há cobrança, data center nem SLA. Esta seção descreve o sistema como ele seria implantado na AWS real.
+Os conceitos desta seção vêm do Encontro 1 da disciplina [1], que define nuvem pelas cinco características do NIST [3]. O LocalStack simula as APIs da AWS, não o modelo operacional: não há cobrança, data center nem SLA. Esta seção descreve o sistema como ele seria implantado na AWS real.
 
 ### 8.1 Modelo de serviço
-O critério da aula é saber quem aplica o patch de segurança.
+O critério da aula é saber quem aplica o patch de segurança [1].
 
 | Parte | Modelo | O provedor cuida de | Nós cuidamos de |
 |---|---|---|---|
@@ -151,7 +154,7 @@ A lógica do sistema está toda em FaaS. Só o servidor web, que entrega a pági
 Não há servidor comprado nem dimensionado para o pico. Uma galeria usada por uma turma na semana de entrega paga só as invocações, requisições e o armazenamento daquela semana. Nas outras semanas, as Lambdas custam zero. O único item sempre ligado é o servidor web, e ele poderia ser trocado por hospedagem estática no S3 com o navegador chamando o API Gateway direto.
 
 ### 8.5 SLA composto
-Valores mensais publicados pela AWS: API Gateway 99,95%, Lambda 99,95%, DynamoDB 99,99% (tabela padrão) e S3 Standard 99,9% (limite abaixo do qual a AWS dá crédito).
+Valores mensais publicados pela AWS [4]: API Gateway 99,95%, Lambda 99,95%, DynamoDB 99,99% (tabela padrão) e S3 Standard 99,9% (limite abaixo do qual a AWS dá crédito).
 
 | Caminho síncrono | Serviços em série | Disponibilidade | Queda tolerada |
 |---|---|---|---|
@@ -194,3 +197,14 @@ O Meu Controle é a proposta de um sistema de finanças pessoais, maior que o Cl
 ## 12. Verificação
 
 `npm test` executa o fluxo de ponta a ponta no LocalStack: cadastro, login, rejeição de token ausente ou adulterado, limites de upload, processamento, download, aviso, isolamento entre usuários, DLQ e logout.
+
+## 13. Referências
+
+1. ULBRA. *Computação em Nuvem 2026/2. Encontro 1: Fundamentos e Panorama.* Slides de aula, 2026.
+2. ULBRA. *Computação em Nuvem 2026/2. Introdução ao LocalStack*, partes 1 e 2 (inclui o enunciado da Atividade #1 G2). Slides de aula, 2026.
+3. MELL, P.; GRANCE, T. *The NIST Definition of Cloud Computing.* NIST Special Publication 800-145. Gaithersburg: NIST, 2011.
+4. AMAZON WEB SERVICES. *AWS Service Level Agreements.* Disponível em: <https://aws.amazon.com/legal/service-level-agreements/>.
+5. AMAZON WEB SERVICES. *Amazon SQS Developer Guide: Amazon SQS dead-letter queues.* Disponível em: <https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html>.
+6. AMAZON WEB SERVICES. *AWS Lambda Developer Guide: Using Lambda with Amazon SQS.* Disponível em: <https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html>.
+7. AMAZON WEB SERVICES. *Amazon SNS Developer Guide.* Disponível em: <https://docs.aws.amazon.com/sns/latest/dg/welcome.html>.
+8. LOCALSTACK. *LocalStack Documentation.* Disponível em: <https://docs.localstack.cloud/>.
