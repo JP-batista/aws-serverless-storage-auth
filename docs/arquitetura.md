@@ -116,11 +116,69 @@ No navegador, as rotas têm o prefixo `/api`.
 - **Segurança de produção** fora do escopo: HTTPS, política de senha mais forte, limite de tentativas, papéis IAM mínimos (o LocalStack não os exige) e segredo no Secrets Manager. O segredo do JWT é gerado a cada deploy e não vai para o Git.
 - **Persistência.** Os dados somem quando o contêiner do LocalStack é recriado.
 
-## 8. Docker Swarm (extra)
+## 8. Conceitos da disciplina aplicados ao CloudLens
+
+O LocalStack simula as APIs da AWS, não o modelo operacional: não há cobrança, data center nem SLA. Esta seção descreve o sistema como ele seria implantado na AWS real.
+
+### 8.1 Modelo de serviço
+O critério da aula é saber quem aplica o patch de segurança.
+
+| Parte | Modelo | O provedor cuida de | Nós cuidamos de |
+|---|---|---|---|
+| As 5 Lambdas | FaaS | Servidor, SO e runtime `nodejs20.x` | O código e as dependências (`bcryptjs`, `jimp`) |
+| DynamoDB, SQS, SNS, API Gateway | PaaS (serviço gerenciado) | Tudo, inclusive capacidade e réplicas | Tabelas, filas, rotas e quem pode usá-las |
+| S3 | Armazenamento gerenciado (fronteira IaaS/SaaS, como o Cloud Storage do exercício da aula) | Durabilidade e disponibilidade | O que é guardado e quem acessa |
+| Servidor web | Contêiner no Swarm, que nós operamos | Nada | A imagem `node:20-alpine`, as dependências e as réplicas |
+
+A lógica do sistema está toda em FaaS. Só o servidor web, que entrega a página e repassa `/api`, continua sendo um processo que alguém precisa manter no ar.
+
+### 8.2 As cinco características do NIST
+
+| Característica | Como aparece no CloudLens |
+|---|---|
+| Autoatendimento sob demanda | `deploy.js` cria buckets, tabelas, filas, tópico, funções e rotas pela API, sem abrir chamado |
+| Amplo acesso via rede | O usuário usa HTTP pelo API Gateway; o deploy usa o SDK apontando para um endpoint |
+| Agrupamento de recursos | Não escolhemos máquina: a Lambda roda onde o provedor decidir (no LocalStack, um contêiner por função) |
+| Elasticidade rápida | A Lambda cria cópias conforme chegam requisições e mensagens; sem uso, não há nenhuma rodando |
+| Serviço medido | Tabelas em `PAY_PER_REQUEST`; Lambda cobrada por invocação e milissegundo; SQS e SNS por requisição |
+
+### 8.3 Elasticidade e escalabilidade
+- **Escalável por arquitetura.** O servidor web não guarda estado (a sessão está no JWT) e a fila absorve picos de upload. Por isso dá para aumentar a capacidade sem mudar o código.
+- **Elástico.** Lambda e DynamoDB sob demanda crescem e encolhem sozinhos. Com `BatchSize: 1`, cada imagem na fila vira uma invocação, e um pico de uploads vira mais invocações em paralelo, até o limite de concorrência da conta.
+- **O Swarm é escalável, mas não elástico.** `docker service scale cloudlens_web=5` aumenta as réplicas, mas alguém precisa rodar o comando. Para ser elástico, precisaria de escala automática por métrica, como o ECS com Auto Scaling na AWS.
+
+### 8.4 CapEx e OpEx
+Não há servidor comprado nem dimensionado para o pico. Uma galeria usada por uma turma na semana de entrega paga só as invocações, requisições e o armazenamento daquela semana. Nas outras semanas, as Lambdas custam zero. O único item sempre ligado é o servidor web, e ele poderia ser trocado por hospedagem estática no S3 com o navegador chamando o API Gateway direto.
+
+### 8.5 SLA composto
+Valores mensais publicados pela AWS: API Gateway 99,95%, Lambda 99,95%, DynamoDB 99,99% (tabela padrão) e S3 Standard 99,9% (limite abaixo do qual a AWS dá crédito).
+
+| Caminho síncrono | Serviços em série | Disponibilidade | Queda tolerada |
+|---|---|---|---|
+| Login | API Gateway × Lambda × DynamoDB = 0,9995 × 0,9995 × 0,9999 | 99,89% | cerca de 47 min/mês |
+| Upload | Login × S3 = 0,9989 × 0,999 | 99,79% | cerca de 1 h 31 min/mês (18 h/ano) |
+
+O cálculo mostra a regra da aula: cada serviço em série puxa a disponibilidade para baixo, e nenhum caminho chega a 99,9%, embora quase todos os serviços tenham SLA maior que isso.
+
+Duas decisões do CloudLens trabalham a favor:
+- **A fila tira o processamento da série.** O upload responde assim que o original está no S3. Se a Lambda `processa-imagem` estiver fora, a mensagem espera na `fila-processamento` (4 dias por padrão, até 14) e é processada quando ela voltar. A indisponibilidade do processamento atrasa a miniatura, mas não derruba o upload.
+- **As réplicas do servidor web ficam em paralelo.** Três réplicas independentes de 99% cada entregam 1 − 0,01³ = 99,9999%. A ressalva é que, no Swarm local, as três rodam na mesma máquina e não são independentes: se a máquina cai, todas caem. A redundância real exige réplicas em hosts ou zonas diferentes.
+
+Pela leitura das cinco perguntas da aula, o SLA da AWS devolve crédito de serviço, não o prejuízo, e o crédito precisa ser pedido.
+
+### 8.6 Responsabilidade compartilhada
+O provedor responde pela segurança **da** nuvem: data center, hardware, rede física, hipervisor e o runtime das Lambdas. Nós respondemos pela segurança **na** nuvem, e em qualquer modelo os dados e o controle de acesso são nossos. No CloudLens:
+
+- **Buckets privados.** O navegador nunca acessa o S3. Todo download passa pela Lambda `arquivos`, que monta a chave com o `userId` do token (`{userId}/{nome}`), então um usuário não consegue pedir o arquivo de outro.
+- **Senhas e sessão.** A senha fica só como hash bcrypt. O JWT vai em cookie `HttpOnly`, e o segredo é gerado no deploy e não vai para o Git.
+- **O caso do bucket público.** Se alguém deixasse o `meu-bucket` público, as fotos de todos os usuários ficariam expostas. A infraestrutura teria funcionado como foi configurada, o SLA não cobriria nada e a responsabilidade seria de quem opera o sistema.
+- **LGPD.** Nome, email e as imagens enviadas são dados pessoais. Quem opera o CloudLens é o controlador e responde perante o titular. O que ainda falta para produção está na seção 7.
+
+## 9. Docker Swarm (extra)
 
 O servidor web não guarda estado: a sessão está no JWT. Por isso ele roda no Swarm com 3 réplicas (`stack.yml`), e o Swarm distribui as requisições entre elas. O cabeçalho `X-Replica` mostra qual contêiner respondeu. O LocalStack continua fora do Swarm, no Docker Compose.
 
-## 9. Atividades de aula cobertas
+## 10. Atividades de aula cobertas
 
 | Atividade | Onde está |
 |---|---|
@@ -129,10 +187,10 @@ O servidor web não guarda estado: a sessão está no JWT. Por isso ele roda no 
 | #3: Lambda acionada por upload, com saída em outro bucket | `processa-imagem` (o evento do S3 passa pela SQS) |
 | G2: cinco serviços, comunicação e documento | Este sistema e este documento |
 
-## 10. Relação com o Meu Controle
+## 11. Relação com o Meu Controle
 
 O Meu Controle é a proposta de um sistema de finanças pessoais, maior que o CloudLens. O CloudLens **não implementa** o Meu Controle: não há OCR, contas, transações nem a revisão de documentos. Ele demonstra o mesmo padrão de comunicação (API síncrona, processamento por fila com DLQ e aviso por SNS) em um escopo pequeno.
 
-## 11. Verificação
+## 12. Verificação
 
 `npm test` executa o fluxo de ponta a ponta no LocalStack: cadastro, login, rejeição de token ausente ou adulterado, limites de upload, processamento, download, aviso, isolamento entre usuários, DLQ e logout.
